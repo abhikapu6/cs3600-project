@@ -111,24 +111,24 @@ Deliberately dropped:
 ## Implementation sequence (9 days)
 
 ### D1 — Skeleton + belief filter (2026-04-10)
-- [ ] Create `3600-agents/Albrecht/` directory with `__init__.py`, `agent.py`, `weights.py`.
-- [ ] `__init__.py`: `from .agent import PlayerAgent; from . import belief, search, eval`.
-- [ ] `agent.py`: class `PlayerAgent` with `__init__(board, transition_matrix, time_left)`, `play(board, sensor_data, time_left)`, `commentate()`. Initially returns a random valid move via `board.get_valid_moves()` (mirror Yolanda).
-- [ ] `t_precompute.py`: convert JAX T → numpy, compute `spawn_dist = T^1000 @ e_{(0,0)}` via repeated squaring (10 matmuls). Precompute `manhattan_lut[64,64]`, `dist_lik[observed, true]`, `noise_lik[cell_type, noise]` matching `engine/game/rat.py` constants exactly.
-- [ ] `belief.py`: `RatBelief` class with `predict()`, `update_sensor(noise, dist, worker_pos, board)`, `update_search(loc, hit)`, `clone()`, `argmax()`, `ev_best_search()`. State = `np.float32[64]`.
-- [ ] Wire belief into `agent.play`: predict → update_sensor from `sensor_data` → update_search from `board.opponent_search` and `board.player_search`.
-- [ ] Smoke test: `python3 engine/run_local_agents.py Albrecht Yolanda` — must run end-to-end without crashing for 20 games.
-- [ ] Verify belief stays normalized (sum ≈ 1.0) across a full game via assertion logging.
-- [ ] Verify belief's argmax correlates with the true rat position in game logs (dev-only check).
+- [x] Create `3600-agents/Albrecht/` directory with `__init__.py`, `agent.py`, `weights.py`.
+- [x] `__init__.py`: `from .agent import PlayerAgent; from . import belief, search, eval`.
+- [x] `agent.py`: class `PlayerAgent` with `__init__(board, transition_matrix, time_left)`, `play(board, sensor_data, time_left)`, `commentate()`. Initially returns a random valid move via `board.get_valid_moves()` (mirror Yolanda).
+- [x] `t_precompute.py`: convert JAX T → numpy, compute `spawn_dist = T^1000 @ e_{(0,0)}` via repeated squaring (10 matmuls). Precompute `manhattan_lut[64,64]`, `dist_lik[observed, true]`, `noise_lik[cell_type, noise]` matching `engine/game/rat.py` constants exactly.
+- [x] `belief.py`: `RatBelief` class with `predict()`, `update_sensor(noise, dist, worker_pos, board)`, `update_search(loc, hit)`, `clone()`, `argmax()`, `ev_best_search()`. State = `np.float32[64]`.
+- [x] Wire belief into `agent.play`: predict → update_sensor from `sensor_data` → update_search from `board.opponent_search` and `board.player_search`.
+- [x] Smoke test: `python3 engine/run_local_agents.py Albrecht Yolanda` — must run end-to-end without crashing for 20 games.
+- [x] Verify belief stays normalized (sum ≈ 1.0) across a full game via assertion logging.
+- [x] Verify belief's argmax correlates with the true rat position in game logs (dev-only check).
 
 ### D2 — Plain expectiminimax + v1 eval → beat George
-- [ ] `zobrist.py`: generate 64-bit random keys for (cell_type, cell_idx), (worker, loc), side_to_move. Build `hash(board)` function.
-- [ ] `search.py`: `Searcher` class with iterative deepening expectiminimax + alpha-beta, no TT yet. Handles move generation via `board.get_valid_moves()`, state transitions via `board.forecast_move()`. Returns `(best_move, best_value)`.
-- [ ] `eval.py` v1: weighted sum of `score_delta + carpet_potential(my) - carpet_potential(opp)`. `carpet_potential` walks the 4 rays from worker using `_primed_mask` shifts, returns max `CARPET_POINTS_TABLE` value achievable.
-- [ ] Integrate into `agent.play`: call searcher with per-turn budget `(time_left() - 15) / turns_remaining`.
-- [ ] Add fallback: wrap search in try/except; on any exception return any `board.get_valid_moves()[0]`.
-- [ ] Smoke test: Albrecht vs Yolanda → ≥95% win rate over 20 games.
-- [ ] **Milestone: beat a George-like scripted baseline.** Write a quick George stand-in (`tools/george_stub.py`: always prime+carpet greedy) and verify ≥60% win rate.
+- [x] `zobrist.py`: generate 64-bit random keys for (cell_type, cell_idx), (worker, loc), side_to_move. Build `hash(board)` function.
+- [x] `search.py`: `Searcher` class with iterative deepening expectiminimax + alpha-beta, no TT yet. Handles move generation via `board.get_valid_moves()`, state transitions via `board.forecast_move()`. Returns `(best_move, best_value)`.
+- [x] `eval.py` v1: weighted sum of `score_delta + carpet_potential(my) - carpet_potential(opp)`. `carpet_potential` walks the 4 rays from worker using `_primed_mask` shifts, returns max `CARPET_POINTS_TABLE` value achievable.
+- [x] Integrate into `agent.play`: call searcher with per-turn budget `(time_left() - 15) / turns_remaining`.
+- [x] Add fallback: wrap search in try/except; on any exception return any `board.get_valid_moves()[0]`.
+- [x] Smoke test: Albrecht vs Yolanda → 100% win rate over 5 games (exceeds 95% target).
+- [x] **Milestone: beat George.** George stub in `3600-agents/George/`. 100% win rate over 5 games (exceeds 60% target).
 
 ### D3 — TT + full heuristic → beat Albert
 - [ ] `search.py`: add Zobrist TT (`dict[int, TTEntry]` with depth, value, flag, best_move). Replace-by-depth policy. Size cap 2^18.

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 engine/run_local_agents.py Yolanda Albrecht)",
+      "Bash(python3 engine/run_local_agents.py Albrecht Yolanda)",
+      "Bash(cat)",
+      "Bash(cp /tmp/batch_test.py /Users/abhik/Downloads/dist/batch_test.py)",
+      "Bash(python3:*)"
+    ]
+  }
+}
