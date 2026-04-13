@@ -7,7 +7,7 @@ from game.enums import BOARD_SIZE
 N = BOARD_SIZE * BOARD_SIZE  # 64
 
 # Deterministic seed for reproducibility
-_rng = random.Random(0xALBRECHT)
+_rng = random.Random(0xA1B2EC47)
 
 # Keys for cell types at each position: [4 types][64 positions]
 # Types: 0=SPACE, 1=PRIMED, 2=CARPET, 3=BLOCKED

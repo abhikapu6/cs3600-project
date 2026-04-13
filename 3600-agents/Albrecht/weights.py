@@ -1,10 +1,10 @@
-# Heuristic evaluation weights — will be tuned via self-play later.
+# Heuristic evaluation weights — hand-tuned D3, to be refined via self-play in D6-D7.
 
 SCORE_DELTA_W = 1.0
-CARPET_POTENTIAL_W = 0.8
+CARPET_POTENTIAL_W = 0.9
 FUTURE_CARPET_W = 0.5
-MOBILITY_W = 0.1
-SETUP_DISTANCE_W = -0.05
+MOBILITY_W = 0.15
+SETUP_DISTANCE_W = -0.08
 DEAD_PRIME_PENALTY_W = -0.3
 SEARCH_EV_BEST_W = 0.6
 BELIEF_ENTROPY_W = -0.02

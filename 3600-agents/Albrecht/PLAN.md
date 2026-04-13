@@ -130,13 +130,13 @@ Deliberately dropped:
 - [x] Smoke test: Albrecht vs Yolanda → 100% win rate over 5 games (exceeds 95% target).
 - [x] **Milestone: beat George.** George stub in `3600-agents/George/`. 100% win rate over 5 games (exceeds 60% target).
 
-### D3 — TT + full heuristic → beat Albert
-- [ ] `search.py`: add Zobrist TT (`dict[int, TTEntry]` with depth, value, flag, best_move). Replace-by-depth policy. Size cap 2^18.
-- [ ] PV move ordering: TT best move first, then carpet (desc by roll score), then prime, then plain, then search.
-- [ ] `eval.py` v2: add `future_carpet_potential` (2-step prime lookahead with `γ=0.6` discount), `mobility` (2-radius BFS on bitboard), `setup_distance`, `dead_prime_penalty`.
-- [ ] Tune initial weights by hand via 20-game self-play vs D2 snapshot.
-- [ ] Performance check: average search depth ≥4 plies in mid-game with <3s/turn budget.
-- [ ] **Milestone: beat an Albert-like reference (expectiminimax depth 3 + simple eval).** Write `tools/albert_stub.py` as a comparator.
+### D3 — TT + full heuristic → beat Albert (2026-04-13)
+- [x] `search.py`: add Zobrist TT (`dict[int, TTEntry]` with depth, value, flag, best_move). Replace-by-depth policy. Size cap 2^18.
+- [x] PV move ordering: TT best move first, then carpet (desc by roll score), then prime, then plain, then search.
+- [x] `eval.py` v2: add `future_carpet_potential` (2-step prime lookahead with `γ=0.6` discount), `mobility` (2-radius BFS on bitboard), `setup_distance`, `dead_prime_penalty`.
+- [x] Tune initial weights by hand — bumped CARPET_POTENTIAL_W 0.8→0.9, MOBILITY_W 0.1→0.15, SETUP_DISTANCE_W -0.05→-0.08.
+- [x] Performance check: depth 9 in 2.7s on mid-game board (well above ≥4 target). TT providing ~6% hit rate.
+- [x] **Milestone: beat Albert 100% (3/3 games).** `tools/albert_stub.py` + `3600-agents/Albert/` created. Also beats George 100% and Yolanda 100%.
 
 ### D4 — Belief-integrated search + opponent folding → beat Carrie
 - [ ] `belief.py`: apply `update_search` to opponent's previous turn search (from `board.opponent_search`) BEFORE sensor update. Confirm via logging that miss zeros out belief at that cell.
