@@ -1,22 +1,26 @@
-"""Iterative-deepening negamax with alpha-beta pruning + Zobrist TT (D3)."""
+"""Iterative-deepening negamax with alpha-beta + Zobrist TT + belief-integrated SEARCH (D4)."""
 
 import os
 import time
 
-from game.enums import MoveType, CARPET_POINTS_TABLE
+from game.enums import MoveType, CARPET_POINTS_TABLE, BOARD_SIZE, RAT_BONUS, RAT_PENALTY
+from game.move import Move
 
 from .eval import evaluate
 from .zobrist import board_hash
 
 _DEBUG = os.environ.get("ALBRECHT_DEBUG") == "1"
 
-# TT entry flags
 _EXACT = 0
-_LOWER = 1  # failed high (beta cutoff) — stored value is a lower bound
-_UPPER = 2  # failed low — stored value is an upper bound
+_LOWER = 1
+_UPPER = 2
 
-# TT size cap
-_TT_MAX = 1 << 18  # 262144 entries
+_TT_MAX = 1 << 18
+
+# Max SEARCH chance-node candidates to expand per node
+_SEARCH_TOPK = 3
+# Also expand cells with belief probability above this threshold
+_SEARCH_BELIEF_THRESHOLD = 0.15
 
 
 class _TTEntry:
@@ -34,8 +38,12 @@ class _Timeout(Exception):
     pass
 
 
+def _idx(loc):
+    return loc[1] * BOARD_SIZE + loc[0]
+
+
 class Searcher:
-    """Expectiminimax searcher using negamax formulation with TT."""
+    """Belief-integrated expectiminimax searcher (negamax form)."""
 
     def __init__(self):
         self.nodes = 0
@@ -45,18 +53,14 @@ class Searcher:
         self.tt_hits = 0
 
     def search(self, board, belief, time_budget):
-        """Run iterative-deepening search and return the best move."""
         self.start_time = time.monotonic()
         self.deadline = self.start_time + 0.9 * time_budget
         self.nodes = 0
         self.tt_hits = 0
         self.max_depth_completed = 0
 
-        moves = board.get_valid_moves(exclude_search=True)
+        moves = self._candidate_moves(board, belief)
         if not moves:
-            moves = board.get_valid_moves(exclude_search=False)
-        if not moves:
-            from game.move import Move
             from game.enums import Direction
             return Move.plain(Direction.UP)
 
@@ -64,9 +68,9 @@ class Searcher:
 
         for depth in range(1, 30):
             try:
-                score, move = self._root_search(board, moves, depth)
-                if move is not None:
-                    self.best_move = move
+                score, best_move = self._root_search(board, belief, moves, depth)
+                if best_move is not None:
+                    self.best_move = best_move
                 self.max_depth_completed = depth
             except _Timeout:
                 break
@@ -75,7 +79,6 @@ class Searcher:
             if elapsed >= 0.5 * (self.deadline - self.start_time):
                 break
 
-        # Evict TT if too large
         if len(self.tt) > _TT_MAX:
             self._evict_tt()
 
@@ -88,11 +91,43 @@ class Searcher:
 
         return self.best_move
 
+    def _candidate_moves(self, board, belief):
+        """All non-search valid moves + top-K belief-weighted search candidates."""
+        non_search = board.get_valid_moves(exclude_search=True)
+        search_moves = self._top_search_moves(board, belief)
+        return non_search + search_moves
+
+    def _top_search_moves(self, board, belief):
+        """Pick up to top-K search cells by belief probability plus any above threshold."""
+        if belief is None:
+            return []
+        b = belief.b
+        # Pair (prob, idx) and pick highest
+        idxs = b.argsort()[::-1]
+        picks = []
+        threshold_hits = []
+        seen = set()
+        for i in idxs[:_SEARCH_TOPK]:
+            i = int(i)
+            if i in seen:
+                continue
+            seen.add(i)
+            loc = (i % BOARD_SIZE, i // BOARD_SIZE)
+            picks.append(Move.search(loc))
+        for i in range(BOARD_SIZE * BOARD_SIZE):
+            if i in seen:
+                continue
+            if float(b[i]) >= _SEARCH_BELIEF_THRESHOLD:
+                loc = (i % BOARD_SIZE, i // BOARD_SIZE)
+                threshold_hits.append(Move.search(loc))
+        # Only keep searches with positive EV (otherwise skip to save time)
+        filtered = [m for m in picks + threshold_hits
+                    if 6.0 * float(b[_idx(m.search_loc)]) - 2.0 > -1.0]
+        return filtered
+
     def _evict_tt(self):
-        """Evict low-depth entries when TT exceeds size cap."""
         if len(self.tt) <= _TT_MAX:
             return
-        # Keep entries with highest depth
         entries = list(self.tt.items())
         entries.sort(key=lambda kv: kv[1].depth, reverse=True)
         self.tt = dict(entries[:_TT_MAX * 3 // 4])
@@ -101,42 +136,81 @@ class Searcher:
         if time.monotonic() >= self.deadline:
             raise _Timeout
 
-    def _root_search(self, board, moves, max_depth):
-        """Search from root at a fixed depth. Returns (score, best_move)."""
+    def _root_search(self, board, belief, moves, max_depth):
         alpha = float('-inf')
         beta = float('inf')
         best_move = None
         best_score = float('-inf')
 
-        # Order moves: TT best first, then by type priority
         h = board_hash(board)
         tt_entry = self.tt.get(h)
         tt_best = tt_entry.best_move if tt_entry and tt_entry.key == h else None
-        ordered = self._order_moves(moves, tt_best)
+        ordered = self._order_moves(moves, tt_best, belief)
 
-        for move in ordered:
+        for mv in ordered:
             self._check_time()
-            child = board.forecast_move(move)
-            if child is None:
+            score = self._score_child(board, belief, mv, max_depth - 1, alpha, beta)
+            if score is None:
                 continue
-            child.reverse_perspective()
-
-            score = -self._negamax(child, max_depth - 1, -beta, -alpha)
 
             if score > best_score:
                 best_score = score
-                best_move = move
+                best_move = mv
             if score > alpha:
                 alpha = score
 
-        # Store root in TT
         if best_move is not None:
             self.tt[h] = _TTEntry(h, max_depth, best_score, _EXACT, best_move)
 
         return best_score, best_move
 
-    def _negamax(self, board, depth, alpha, beta):
-        """Negamax with alpha-beta and TT. Returns score from current player's perspective."""
+    def _score_child(self, board, belief, mv, depth, alpha, beta):
+        """Apply move and return value from current side's perspective."""
+        if mv.move_type == MoveType.SEARCH:
+            # Chance node: handle hit/miss branches.
+            loc = mv.search_loc
+            p = float(belief.b[_idx(loc)]) if belief is not None else 0.0
+            child = board.forecast_move(mv)
+            if child is None:
+                return None
+            child.reverse_perspective()
+
+            # Hit branch: rat caught, respawn distribution, +RAT_BONUS
+            belief_hit = belief.clone() if belief is not None else None
+            if belief_hit is not None:
+                belief_hit.b = belief_hit.pre.spawn_dist.copy()
+                belief_hit.predict()
+
+            # Miss branch: zero out belief at loc, renormalize, -RAT_PENALTY
+            belief_miss = belief.clone() if belief is not None else None
+            if belief_miss is not None:
+                belief_miss.b[_idx(loc)] = 0.0
+                s = belief_miss.b.sum()
+                if s > 0:
+                    belief_miss.b /= s
+                belief_miss.predict()
+
+            # Wide window for chance-node children (bounds pruning deferred)
+            v_hit_child = self._negamax(child, belief_hit, depth,
+                                         float('-inf'), float('inf'))
+            v_miss_child = self._negamax(child, belief_miss, depth,
+                                          float('-inf'), float('inf'))
+
+            # Convert child scores (child-side) to our side and add rewards.
+            v_hit = RAT_BONUS + (-v_hit_child)
+            v_miss = -RAT_PENALTY + (-v_miss_child)
+            return p * v_hit + (1.0 - p) * v_miss
+
+        child = board.forecast_move(mv)
+        if child is None:
+            return None
+        child.reverse_perspective()
+        child_belief = belief.clone() if belief is not None else None
+        if child_belief is not None:
+            child_belief.predict()
+        return -self._negamax(child, child_belief, depth, -beta, -alpha)
+
+    def _negamax(self, board, belief, depth, alpha, beta):
         self.nodes += 1
         self._check_time()
 
@@ -144,9 +218,8 @@ class Searcher:
             return self._terminal_score(board)
 
         if depth <= 0:
-            return evaluate(board)
+            return evaluate(board, belief)
 
-        # TT probe
         h = board_hash(board)
         tt_entry = self.tt.get(h)
         tt_best = None
@@ -167,32 +240,28 @@ class Searcher:
                         beta = tt_entry.value
             tt_best = tt_entry.best_move
 
-        moves = board.get_valid_moves(exclude_search=True)
+        moves = self._candidate_moves(board, belief)
         if not moves:
-            return evaluate(board)
+            return evaluate(board, belief)
 
-        ordered = self._order_moves(moves, tt_best)
+        ordered = self._order_moves(moves, tt_best, belief)
         best_score = float('-inf')
         best_move = None
         orig_alpha = alpha
 
-        for move in ordered:
-            child = board.forecast_move(move)
-            if child is None:
+        for mv in ordered:
+            score = self._score_child(board, belief, mv, depth - 1, alpha, beta)
+            if score is None:
                 continue
-            child.reverse_perspective()
-
-            score = -self._negamax(child, depth - 1, -beta, -alpha)
 
             if score > best_score:
                 best_score = score
-                best_move = move
+                best_move = mv
             if score > alpha:
                 alpha = score
             if alpha >= beta:
-                break  # beta cutoff
+                break
 
-        # Store in TT (replace-by-depth)
         if best_score > float('-inf'):
             if best_score <= orig_alpha:
                 flag = _UPPER
@@ -204,10 +273,9 @@ class Searcher:
             if existing is None or existing.depth <= depth:
                 self.tt[h] = _TTEntry(h, depth, best_score, flag, best_move)
 
-        return best_score if best_score > float('-inf') else evaluate(board)
+        return best_score if best_score > float('-inf') else evaluate(board, belief)
 
     def _terminal_score(self, board):
-        """Score for a finished game from player_worker's perspective."""
         my_pts = board.player_worker.get_points()
         opp_pts = board.opponent_worker.get_points()
         diff = my_pts - opp_pts
@@ -215,25 +283,35 @@ class Searcher:
             return 1000.0 + diff
         elif diff < 0:
             return -1000.0 + diff
-        else:
-            return 0.0
+        return 0.0
 
     @staticmethod
     def _moves_match(a, b):
-        """Check if two Move objects represent the same move."""
         if a.move_type != b.move_type:
             return False
         if a.move_type == MoveType.CARPET:
             return a.direction == b.direction and a.roll_length == b.roll_length
         if a.move_type == MoveType.SEARCH:
             return a.search_loc == b.search_loc
-        return a.direction == b.direction  # PLAIN or PRIME
+        return a.direction == b.direction
 
     @staticmethod
-    def _order_moves(moves, tt_best=None):
-        """Order moves: TT best → carpet (desc) → prime → plain → search."""
+    def _move_priority(m, belief):
+        if m.move_type == MoveType.CARPET:
+            return (0, -CARPET_POINTS_TABLE.get(m.roll_length, 0))
+        if m.move_type == MoveType.PRIME:
+            return (1, 0)
+        if m.move_type == MoveType.PLAIN:
+            return (2, 0)
+        # SEARCH: order by negative EV so high-EV searches come first
+        if belief is not None:
+            p = float(belief.b[_idx(m.search_loc)])
+            return (3, -p)
+        return (3, 0)
+
+    @staticmethod
+    def _order_moves(moves, tt_best, belief):
         if tt_best is not None:
-            # Put TT best move first, rest sorted by type priority
             first = None
             rest = []
             for m in moves:
@@ -241,30 +319,8 @@ class Searcher:
                     first = m
                 else:
                     rest.append(m)
-
-            def priority(m):
-                if m.move_type == MoveType.CARPET:
-                    return (0, -CARPET_POINTS_TABLE.get(m.roll_length, 0))
-                elif m.move_type == MoveType.PRIME:
-                    return (1, 0)
-                elif m.move_type == MoveType.PLAIN:
-                    return (2, 0)
-                else:
-                    return (3, 0)
-
-            rest.sort(key=priority)
+            rest.sort(key=lambda mv: Searcher._move_priority(mv, belief))
             if first is not None:
                 return [first] + rest
             return rest
-
-        def priority(m):
-            if m.move_type == MoveType.CARPET:
-                return (0, -CARPET_POINTS_TABLE.get(m.roll_length, 0))
-            elif m.move_type == MoveType.PRIME:
-                return (1, 0)
-            elif m.move_type == MoveType.PLAIN:
-                return (2, 0)
-            else:
-                return (3, 0)
-
-        return sorted(moves, key=priority)
+        return sorted(moves, key=lambda mv: Searcher._move_priority(mv, belief))

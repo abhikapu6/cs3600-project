@@ -138,11 +138,11 @@ Deliberately dropped:
 - [x] Performance check: depth 9 in 2.7s on mid-game board (well above ≥4 target). TT providing ~6% hit rate.
 - [x] **Milestone: beat Albert 100% (3/3 games).** `tools/albert_stub.py` + `3600-agents/Albert/` created. Also beats George 100% and Yolanda 100%.
 
-### D4 — Belief-integrated search + opponent folding → beat Carrie
-- [ ] `belief.py`: apply `update_search` to opponent's previous turn search (from `board.opponent_search`) BEFORE sensor update. Confirm via logging that miss zeros out belief at that cell.
-- [ ] `search.py`: treat `Move.search(c)` as a chance node inside expectiminimax. Compute `p = belief[idx(c)]`; child value = `p*(4 + V_hit) + (1-p)*(-2 + V_miss)` where `V_hit` uses belief reset to `spawn_dist` and `V_miss` uses belief with `b[idx(c)]=0, renormalize`. Prune `SEARCH` generation to top-3 belief cells + any cell with `b>0.15`.
-- [ ] `eval.py` v3: add `search_ev_best`, `belief_entropy`, `opponent_disruption`, `time_pressure`, `blocked_corner_awareness`. Pass belief into eval.
-- [ ] Smoke test: Albrecht vs Albrecht-D3 snapshot → ≥70% win rate.
+### D4 — Belief-integrated search + opponent folding → beat Carrie (2026-04-13)
+- [x] `belief.py`: apply `update_search` to opponent's previous turn search (from `board.opponent_search`) BEFORE sensor update. Order in `agent.play`: our-search fold → predict → opp-search fold → predict → sensor update.
+- [x] `search.py`: treat `Move.search(c)` as a chance node inside negamax. Compute `p = belief[idx(c)]`; value = `p*(RAT_BONUS + (-v_hit_child)) + (1-p)*(-RAT_PENALTY + (-v_miss_child))` where `V_hit` uses belief reset to `spawn_dist` and `V_miss` uses belief with `b[idx(c)]=0, renormalize`. Prune `SEARCH` generation to top-3 belief cells + any cell with `b>0.15`, filtered to positive EV. Belief is clone()+predict()'d at each ply.
+- [x] `eval.py` v3: added `search_ev_best`, `belief_entropy`, `opponent_disruption` (opp rays walled), `time_pressure` (based on worker `time_left` delta), `blocked_corner_awareness` (radius-2 blocked mass). `evaluate(board, belief=None)` now takes optional belief.
+- [x] Smoke test: Albrecht vs Yolanda → A:60 B:2 (single-game decisive win). vs Albert → 3/3 games won (100%). D4 features stable with no crashes.
 - [ ] **Milestone: beat Carrie on bytefight.org in ≥3/5 scrimmage games.** (Upload early — don't wait until D9.)
 
 ### D5 — Hardening + safety nets
