@@ -143,7 +143,17 @@ Deliberately dropped:
 - [x] `search.py`: treat `Move.search(c)` as a chance node inside negamax. Compute `p = belief[idx(c)]`; value = `p*(RAT_BONUS + (-v_hit_child)) + (1-p)*(-RAT_PENALTY + (-v_miss_child))` where `V_hit` uses belief reset to `spawn_dist` and `V_miss` uses belief with `b[idx(c)]=0, renormalize`. Prune `SEARCH` generation to top-3 belief cells + any cell with `b>0.15`, filtered to positive EV. Belief is clone()+predict()'d at each ply.
 - [x] `eval.py` v3: added `search_ev_best`, `belief_entropy`, `opponent_disruption` (opp rays walled), `time_pressure` (based on worker `time_left` delta), `blocked_corner_awareness` (radius-2 blocked mass). `evaluate(board, belief=None)` now takes optional belief.
 - [x] Smoke test: Albrecht vs Yolanda → A:60 B:2 (single-game decisive win). vs Albert → 3/3 games won (100%). D4 features stable with no crashes.
-- [ ] **Milestone: beat Carrie on bytefight.org in ≥3/5 scrimmage games.** (Upload early — don't wait until D9.)
+- [x] **Milestone: beat Carrie on bytefight.org in ≥3/5 scrimmage games.** FAILED on 2026-04-14 eve — 1W-1D-3L vs Carrie (matches saved as `match.json`, `match (1..4).json` in repo root). See D5.5.
+
+### D5.5 — Carpet-chain fix (2026-04-14 → 2026-04-15, blocker for D6)
+
+Diagnosis from 5 Carrie replays: carpet-count perfectly predicts outcome (7 vs 3 in our one win; ≤ Carrie's in every loss). Carrie cashes 5–6-length carpets (10–15 pts each); Albrecht cashes 2–3-length (2–4 pts). Search accuracy, belief, and time are all fine. Structural eval bias — Albrecht undervalues long chains and over-searches.
+
+- [x] `eval.py` `future_carpet_potential`: bump γ 0.6 → 0.85, extend future lookahead 2 → 3 primes. Without this a 5-length future carpet (10 pts, 2 steps away) is valued 3.6, less than immediately cashing a 3-length (4 pts) — Albrecht cashes early.
+- [x] `weights.py` `FUTURE_CARPET_W` 0.5 → 0.8 (chain setup now carries real weight with the higher γ).
+- [x] `search.py` `_SEARCH_BELIEF_THRESHOLD` 0.15 → 0.33 (true break-even `p = RAT_PENALTY/(RAT_BONUS+RAT_PENALTY) = 1/3`). Also tighten EV filter `6p - 2 > -1` → `6p - 2 > 0` so we never expand −EV search branches.
+- [ ] **We do not have Carrie's bot locally.** Validation path: smoke-check vs Albert/Yolanda to confirm no regression, then re-upload `Albrecht.zip` to bytefight.org and run ≥5 Carrie scrimmages. Gate D6 self-play tuning on ≥3/5 wins.
+- [ ] Save new Carrie replays to `3600-agents/matches/` for regression baseline.
 
 ### D5 — Hardening + safety nets
 - [ ] Time budget clamps: hard cutoff at 90% of per-turn budget via `time.monotonic()`; persistent wall-clock guard at `time_left() < 20` → emergency shallow search only.

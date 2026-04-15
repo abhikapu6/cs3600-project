@@ -59,7 +59,7 @@ def carpet_potential(board, worker_loc):
 
 
 def future_carpet_potential(board, worker_loc):
-    gamma = 0.6
+    gamma = 0.85
     best = 0.0
     x, y = worker_loc
     primed = board._primed_mask
@@ -82,7 +82,7 @@ def future_carpet_potential(board, worker_loc):
                 break
             if primed & bit:
                 count += 1
-            elif future_steps < 2 and not ((blocked | carpet) & bit):
+            elif future_steps < 3 and not ((blocked | carpet) & bit):
                 count += 1
                 future_steps += 1
                 discount *= gamma

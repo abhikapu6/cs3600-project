@@ -20,7 +20,8 @@ _TT_MAX = 1 << 18
 # Max SEARCH chance-node candidates to expand per node
 _SEARCH_TOPK = 3
 # Also expand cells with belief probability above this threshold
-_SEARCH_BELIEF_THRESHOLD = 0.15
+# (true break-even is p = RAT_PENALTY / (RAT_BONUS + RAT_PENALTY) = 2/6 = 0.333)
+_SEARCH_BELIEF_THRESHOLD = 0.33
 
 
 class _TTEntry:
@@ -74,10 +75,16 @@ class Searcher:
                 self.max_depth_completed = depth
             except _Timeout:
                 break
+            except Exception as e:
+                if _DEBUG:
+                    print(f"[Albrecht search] depth {depth} exception: {e!r}")
+                break
 
             elapsed = time.monotonic() - self.start_time
             if elapsed >= 0.5 * (self.deadline - self.start_time):
                 break
+            if len(self.tt) > _TT_MAX:
+                self._evict_tt()
 
         if len(self.tt) > _TT_MAX:
             self._evict_tt()
@@ -122,7 +129,7 @@ class Searcher:
                 threshold_hits.append(Move.search(loc))
         # Only keep searches with positive EV (otherwise skip to save time)
         filtered = [m for m in picks + threshold_hits
-                    if 6.0 * float(b[_idx(m.search_loc)]) - 2.0 > -1.0]
+                    if 6.0 * float(b[_idx(m.search_loc)]) - 2.0 > 0.0]
         return filtered
 
     def _evict_tt(self):
