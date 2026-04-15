@@ -1,26 +1,31 @@
-"""Run N parallel games of Albrecht vs Yolanda; report crashes/timeouts/winrate."""
+"""Run N parallel games of Albrecht vs Yolanda; report crashes/timeouts/winrate.
+
+Uses subprocess-based parallelism (not multiprocessing) to avoid macOS fork/daemon
+issues with JAX and the engine's own process management.
+"""
 
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import time
 import traceback
-from multiprocessing import Pool
 
 
-def run_one(args):
-    seed, swap, limit_resources = args
-    top = pathlib.Path(__file__).resolve().parents[3]
-    sys.path.insert(0, str(top / "engine"))
-    sys.path.insert(0, str(top / "3600-agents"))
+THIS_FILE = pathlib.Path(__file__).resolve()
+TOP = THIS_FILE.parents[3]
+
+
+def run_single(seed: int, swap: bool, limit_resources: bool) -> dict:
+    """Play one game in-process. Called when invoked with --single."""
+    sys.path.insert(0, str(TOP / "engine"))
+    sys.path.insert(0, str(TOP / "3600-agents"))
     import random
     random.seed(seed)
-    try:
-        from gameplay import play_game
-    except Exception:
-        return {"seed": seed, "ok": False, "err": traceback.format_exc()}
-    play_dir = str(top / "3600-agents")
+    from gameplay import play_game
+
+    play_dir = str(TOP / "3600-agents")
     a, b = ("Albrecht", "Yolanda") if not swap else ("Yolanda", "Albrecht")
     t0 = time.perf_counter()
     try:
@@ -46,43 +51,88 @@ def run_one(args):
                 "wall": time.perf_counter() - t0}
 
 
+def launch_worker(seed: int, swap: bool, limit: bool):
+    args = [sys.executable, str(THIS_FILE), "--single", str(seed),
+            "1" if swap else "0", "1" if limit else "0"]
+    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--single":
+        seed = int(sys.argv[2])
+        swap = sys.argv[3] == "1"
+        limit = sys.argv[4] == "1"
+        r = run_single(seed, swap, limit)
+        print(json.dumps(r))
+        return
+
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 50
     workers = int(sys.argv[2]) if len(sys.argv) > 2 else 4
     limit = "--limit" in sys.argv
-    args = [(i, i % 2 == 1, limit) for i in range(n)]
-    out_path = pathlib.Path(__file__).parent / "stress_results.jsonl"
-    print(f"Running {n} games, {workers} workers, limit_resources={limit}")
+
+    out_path = THIS_FILE.parent / "stress_results.jsonl"
+    print(f"Running {n} games, {workers} workers, limit_resources={limit}", flush=True)
     t0 = time.perf_counter()
-    crashes = 0
-    wins = 0
-    losses = 0
-    ties = 0
-    with Pool(workers) as p, open(out_path, "w") as f:
-        for i, r in enumerate(p.imap_unordered(run_one, args)):
-            f.write(json.dumps(r) + "\n")
-            f.flush()
-            if not r.get("ok"):
-                crashes += 1
-                print(f"[{i+1}/{n}] CRASH seed={r['seed']}: {r.get('err','?').splitlines()[-1]}")
+    crashes = wins = losses = ties = 0
+
+    # Task queue
+    tasks = [(i, i % 2 == 1, limit) for i in range(n)]
+    active = {}  # proc -> (idx, seed, swap)
+    next_task = 0
+    completed = 0
+
+    with open(out_path, "w") as f:
+        while next_task < n or active:
+            # Fill up workers
+            while len(active) < workers and next_task < n:
+                seed, swap, lim = tasks[next_task]
+                proc = launch_worker(seed, swap, lim)
+                active[proc] = (next_task, seed, swap)
+                next_task += 1
+
+            # Wait for any to finish
+            done_procs = []
+            for proc in list(active.keys()):
+                if proc.poll() is not None:
+                    done_procs.append(proc)
+            if not done_procs:
+                time.sleep(0.5)
                 continue
-            albrecht_is_a = not r["swap"]
-            winner = r["winner"]
-            if "PLAYER_A" in winner:
-                wins += albrecht_is_a
-                losses += not albrecht_is_a
-            elif "PLAYER_B" in winner:
-                wins += not albrecht_is_a
-                losses += albrecht_is_a
-            else:
-                ties += 1
-            print(f"[{i+1}/{n}] seed={r['seed']} swap={r['swap']} "
-                  f"winner={winner} pts={r['a_pts']}-{r['b_pts']} "
-                  f"turns={r['turns']} wall={r['wall']:.1f}s")
+
+            for proc in done_procs:
+                idx, seed, swap = active.pop(proc)
+                completed += 1
+                out, err = proc.communicate()
+                try:
+                    r = json.loads(out.decode().strip().splitlines()[-1])
+                except Exception:
+                    r = {"seed": seed, "ok": False, "swap": swap,
+                         "err": f"bad stdout: {out!r} / stderr: {err!r}"}
+                f.write(json.dumps(r) + "\n")
+                f.flush()
+                if not r.get("ok"):
+                    crashes += 1
+                    err_line = r.get("err", "?").splitlines()[-1] if r.get("err") else "?"
+                    print(f"[{completed}/{n}] CRASH seed={seed}: {err_line}", flush=True)
+                    continue
+                albrecht_is_a = not r["swap"]
+                winner = r["winner"]
+                if "PLAYER_A" in winner:
+                    wins += albrecht_is_a
+                    losses += not albrecht_is_a
+                elif "PLAYER_B" in winner:
+                    wins += not albrecht_is_a
+                    losses += albrecht_is_a
+                else:
+                    ties += 1
+                print(f"[{completed}/{n}] seed={r['seed']} swap={r['swap']} "
+                      f"winner={winner} pts={r['a_pts']}-{r['b_pts']} "
+                      f"turns={r['turns']} wall={r['wall']:.1f}s", flush=True)
+
     elapsed = time.perf_counter() - t0
-    print(f"\n=== {n} games in {elapsed:.1f}s ===")
-    print(f"Albrecht: {wins}W {losses}L {ties}T  crashes={crashes}")
-    print(f"results written to {out_path}")
+    print(f"\n=== {n} games in {elapsed:.1f}s ===", flush=True)
+    print(f"Albrecht: {wins}W {losses}L {ties}T  crashes={crashes}", flush=True)
+    print(f"results written to {out_path}", flush=True)
 
 
 if __name__ == "__main__":

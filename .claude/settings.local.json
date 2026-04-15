@@ -5,7 +5,9 @@
       "Bash(python3 engine/run_local_agents.py Albrecht Yolanda)",
       "Bash(cat)",
       "Bash(cp /tmp/batch_test.py /Users/abhik/Downloads/dist/batch_test.py)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(timeout 120 python -c ' *)",
+      "Bash(python 3600-agents/Albrecht/tools/stress_test.py)"
     ]
   }
 }

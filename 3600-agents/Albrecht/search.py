@@ -19,9 +19,13 @@ _TT_MAX = 1 << 18
 
 # Max SEARCH chance-node candidates to expand per node
 _SEARCH_TOPK = 3
-# Also expand cells with belief probability above this threshold
-# (true break-even is p = RAT_PENALTY / (RAT_BONUS + RAT_PENALTY) = 2/6 = 0.333)
-_SEARCH_BELIEF_THRESHOLD = 0.33
+# Also expand cells with belief probability above this threshold.
+# True myopic break-even is p = 2/6 = 0.333, but a miss concentrates belief
+# and enables high-EV searches next turn — so we accept slightly negative
+# myopic EV to capture that information value.
+_SEARCH_BELIEF_THRESHOLD = 0.20
+# Accept search candidates with EV above this floor (was 0.0).
+_SEARCH_EV_FLOOR = -1.0
 
 
 class _TTEntry:
@@ -129,7 +133,7 @@ class Searcher:
                 threshold_hits.append(Move.search(loc))
         # Only keep searches with positive EV (otherwise skip to save time)
         filtered = [m for m in picks + threshold_hits
-                    if 6.0 * float(b[_idx(m.search_loc)]) - 2.0 > 0.0]
+                    if 6.0 * float(b[_idx(m.search_loc)]) - 2.0 > _SEARCH_EV_FLOOR]
         return filtered
 
     def _evict_tt(self):
@@ -305,16 +309,21 @@ class Searcher:
     @staticmethod
     def _move_priority(m, belief):
         if m.move_type == MoveType.CARPET:
-            return (0, -CARPET_POINTS_TABLE.get(m.roll_length, 0))
+            pts = CARPET_POINTS_TABLE.get(m.roll_length, 0)
+            # Large carpets (4+) cash first; short carpets (2-3) defer below
+            # PRIME so the search prefers building bigger chains.
+            if m.roll_length >= 4:
+                return (0, -pts)
+            return (2, -pts)
         if m.move_type == MoveType.PRIME:
             return (1, 0)
         if m.move_type == MoveType.PLAIN:
-            return (2, 0)
+            return (3, 0)
         # SEARCH: order by negative EV so high-EV searches come first
         if belief is not None:
             p = float(belief.b[_idx(m.search_loc)])
-            return (3, -p)
-        return (3, 0)
+            return (4, -p)
+        return (4, 0)
 
     @staticmethod
     def _order_moves(moves, tt_best, belief):

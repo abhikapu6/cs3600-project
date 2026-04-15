@@ -11,6 +11,7 @@ from game.enums import BOARD_SIZE, CARPET_POINTS_TABLE
 from .weights import (
     SCORE_DELTA_W, CARPET_POTENTIAL_W, FUTURE_CARPET_W,
     MOBILITY_W, SETUP_DISTANCE_W, DEAD_PRIME_PENALTY_W,
+    EXCESS_PRIMES_W, EXCESS_PRIMES_THRESHOLD,
     SEARCH_EV_BEST_W, BELIEF_ENTROPY_W, OPPONENT_DISRUPTION_W,
     TIME_PRESSURE_W, BLOCKED_CORNER_W,
 )
@@ -59,38 +60,49 @@ def carpet_potential(board, worker_loc):
 
 
 def future_carpet_potential(board, worker_loc):
-    gamma = 0.85
+    """Best achievable carpet chain anywhere on the board, discounted by
+    future primes needed and Manhattan distance from the worker to the
+    chain's entry cell (adjacent to the start)."""
+    gamma_prime = 0.85
+    gamma_dist = 0.75
     best = 0.0
-    x, y = worker_loc
     primed = board._primed_mask
     blocked = board._blocked_mask
     carpet = board._carpet_mask
     wm = _worker_mask(board)
+    obstacle = blocked | carpet | wm
+    wx, wy = worker_loc
 
-    for dx, dy in _DIRS:
-        cx, cy = x, y
-        count = 0
-        future_steps = 0
-        discount = 1.0
-        for _ in range(BOARD_SIZE - 1):
-            cx += dx
-            cy += dy
-            if cx < 0 or cx >= BOARD_SIZE or cy < 0 or cy >= BOARD_SIZE:
-                break
-            bit = 1 << (cy * BOARD_SIZE + cx)
-            if wm & bit:
-                break
-            if primed & bit:
-                count += 1
-            elif future_steps < 3 and not ((blocked | carpet) & bit):
-                count += 1
-                future_steps += 1
-                discount *= gamma
-            else:
-                break
-
-        if count > 0 and count in CARPET_POINTS_TABLE:
-            val = CARPET_POINTS_TABLE[count] * discount
+    for sx, sy, _sbit in _ALL_BITS:
+        for dx, dy in _DIRS:
+            entry_x, entry_y = sx - dx, sy - dy
+            if not (0 <= entry_x < BOARD_SIZE and 0 <= entry_y < BOARD_SIZE):
+                continue
+            entry_bit = 1 << (entry_y * BOARD_SIZE + entry_x)
+            if (blocked | carpet) & entry_bit:
+                continue
+            cx, cy = sx, sy
+            length = 0
+            future = 0
+            for _ in range(BOARD_SIZE):
+                if cx < 0 or cx >= BOARD_SIZE or cy < 0 or cy >= BOARD_SIZE:
+                    break
+                bit = 1 << (cy * BOARD_SIZE + cx)
+                if primed & bit:
+                    length += 1
+                elif not (obstacle & bit):
+                    length += 1
+                    future += 1
+                else:
+                    break
+                cx += dx
+                cy += dy
+            if length < 2 or length not in CARPET_POINTS_TABLE:
+                continue
+            dist = abs(wx - entry_x) + abs(wy - entry_y)
+            val = (CARPET_POINTS_TABLE[length]
+                   * (gamma_prime ** future)
+                   * (gamma_dist ** dist))
             if val > best:
                 best = val
     return best
@@ -286,12 +298,16 @@ def evaluate(board, belief=None):
 
     dpp = dead_prime_penalty(board)
 
+    total_primes = bin(board._primed_mask).count("1")
+    excess_primes = max(0, total_primes - EXCESS_PRIMES_THRESHOLD)
+
     score = (SCORE_DELTA_W * (my_points - opp_points)
              + CARPET_POTENTIAL_W * (my_cp - opp_cp)
              + FUTURE_CARPET_W * (my_fcp - opp_fcp)
              + MOBILITY_W * (my_mob - opp_mob)
              + SETUP_DISTANCE_W * (my_sd - opp_sd)
-             + DEAD_PRIME_PENALTY_W * dpp)
+             + DEAD_PRIME_PENALTY_W * dpp
+             + EXCESS_PRIMES_W * excess_primes)
 
     # v3 belief-aware features
     score += SEARCH_EV_BEST_W * search_ev_best(belief)
